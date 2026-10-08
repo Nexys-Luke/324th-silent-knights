@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin — 324th Silent Knights</title>
+<style>
+  body{margin:0;background:#070b12;color:#e8edf5;font-family:sans-serif;padding:40px 20px;}
+  .wrap{max-width:720px;margin:0 auto;}
+  h1{font-size:1.4rem;}
+  input{width:100%;padding:11px;margin-bottom:12px;background:#121b2b;border:1px solid #223049;border-radius:3px;color:#e8edf5;}
+  label{font-size:.8rem;color:#9fb1c9;display:block;margin-bottom:4px;}
+  button{padding:10px 18px;background:#4fe0b3;color:#05140f;border:none;border-radius:3px;font-weight:600;cursor:pointer;}
+  button.reject{background:#ff6b57;}
+  #login{max-width:340px;margin:80px auto;}
+  #panel{display:none;}
+  .row{background:#121b2b;border:1px solid #223049;border-radius:4px;padding:16px;margin-bottom:12px;}
+  .row b{color:#4fe0b3;}
+  .row .actions{margin-top:10px;display:flex;gap:10px;}
+  .status{font-size:.8rem;color:#9fb1c9;}
+  #err{color:#ff6b57;font-size:.85rem;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="login">
+    <h1>Admin sign in</h1>
+    <input id="email" type="email" placeholder="Email">
+    <input id="pass" type="password" placeholder="Password">
+    <button onclick="doLogin()">Sign in</button>
+    <p id="err"></p>
+  </div>
+
+  <div id="panel">
+    <h1>Pending sign-ups</h1>
+    <button onclick="doLogout()" style="background:#223049;color:#e8edf5;margin-bottom:20px;">Log out</button>
+    <div id="list"></div>
+
+    <h1 style="margin-top:40px;">Manage events</h1>
+    <form id="eventForm" style="margin-bottom:20px;">
+      <input id="evDate" type="text" placeholder="e.g. Thu 09 Oct" required>
+      <input id="evName" type="text" placeholder="Event name" required>
+      <input id="evType" type="text" placeholder="e.g. 4-ship, F-16C, daytime" required>
+      <label for="evTime">Exact date &amp; time (used for the countdown)</label>
+      <input id="evTime" type="datetime-local" required>
+      <button type="submit">Add event</button>
+    </form>
+    <div id="eventsAdminList"></div>
+
+    <h1 style="margin-top:40px;">Manage roster</h1>
+    <form id="rosterForm" style="margin-bottom:20px;">
+      <input id="rCallsign" type="text" placeholder="Callsign" required>
+      <input id="rRole" type="text" placeholder="Role (e.g. Wingman, Flight Lead)" required>
+      <input id="rAirframe" type="text" placeholder="Airframe (e.g. F-16C)" required>
+      <input id="rJoined" type="text" placeholder="Joined (e.g. 2025)" required>
+      <input id="rStatus" type="text" placeholder="Status (e.g. Active, On leave)" value="Active">
+      <button type="submit">Add pilot</button>
+    </form>
+    <div id="rosterAdminList"></div>
+  </div>
+
+</div>
+
+<script type="module">
+  import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+  const supabase = createClient(
+    'https://crtwjocizokpjerdnmvq.supabase.co',
+    'sb_publishable_OCHJsE713OAkk1UC3qnvfw_eeJsbWk5'
+  );
+
+  window.doLogin = async () => {
+    const email = document.getElementById('email').value;
+    const pass = document.getElementById('pass').value;
+    const { error } = await supabase.auth.signInWithPassword({ email, password: pass });
+    if (error) {
+      document.getElementById('err').textContent = "Login failed — check email/password.";
+    } else {
+      showPanel();
+    }
+  };
+
+  window.doLogout = async () => {
+    await supabase.auth.signOut();
+    location.reload();
+  };
+
+  async function showPanel() {
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('panel').style.display = 'block';
+    loadSignups();
+    loadAdminEvents();
+    loadAdminRoster();
+  }
+
+  async function loadSignups() {
+    const { data, error } = await supabase
+      .from('signups')
+      .select('*')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
+
+    const list = document.getElementById('list');
+    if (error) { list.innerHTML = "<p class='status'>Couldn't load applications.</p>"; return; }
+    if (!data || data.length === 0) { list.innerHTML = "<p class='status'>No pending applications.</p>"; return; }
+
+    list.innerHTML = data.map(d => `
+      <div class="row">
+        <div><b>${d.name || ''}</b> — ${d.discord || ''}</div>
+        <div class="status">Hours: ${d.hours || 'n/a'} · Timezone: ${d.timezone || 'n/a'}</div>
+        <div class="actions">
+          <button onclick="window.setStatus('${d.id}','accepted')">Accept</button>
+          <button class="reject" onclick="window.setStatus('${d.id}','rejected')">Reject</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  window.setStatus = async (id, status) => {
+    await supabase.from('signups').update({ status }).eq('id', id);
+    loadSignups();
+  };
+
+  document.getElementById('eventForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const localValue = document.getElementById('evTime').value; // e.g. "2026-10-09T19:00"
+    await supabase.from('events').insert({
+      event_date: document.getElementById('evDate').value,
+      name: document.getElementById('evName').value,
+      type: document.getElementById('evType').value,
+      event_time: localValue ? new Date(localValue).toISOString() : null
+    });
+    document.getElementById('eventForm').reset();
+    loadAdminEvents();
+  });
+
+  async function loadAdminEvents() {
+    const { data } = await supabase.from('events').select('*').order('event_time', { ascending: true });
+    const list = document.getElementById('eventsAdminList');
+    if (!data || data.length === 0) { list.innerHTML = "<p class='status'>No events yet.</p>"; return; }
+    list.innerHTML = data.map(ev => `
+      <div class="row">
+        <div><b>${ev.event_date}</b> — ${ev.name}</div>
+        <div class="status">${ev.type}${ev.event_time ? ' · ' + new Date(ev.event_time).toLocaleString() : ''}</div>
+        <div class="actions">
+          <button class="reject" onclick="window.deleteEvent(${ev.id})">Delete</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  window.deleteEvent = async (id) => {
+    await supabase.from('events').delete().eq('id', id);
+    loadAdminEvents();
+  };
+
+  document.getElementById('rosterForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await supabase.from('roster').insert({
+      callsign: document.getElementById('rCallsign').value,
+      role: document.getElementById('rRole').value,
+      airframe: document.getElementById('rAirframe').value,
+      joined: document.getElementById('rJoined').value,
+      status: document.getElementById('rStatus').value || 'Active'
+    });
+    document.getElementById('rosterForm').reset();
+    loadAdminRoster();
+  });
+
+  async function loadAdminRoster() {
+    const { data } = await supabase.from('roster').select('*').order('id', { ascending: true });
+    const list = document.getElementById('rosterAdminList');
+    if (!data || data.length === 0) { list.innerHTML = "<p class='status'>No pilots yet.</p>"; return; }
+    list.innerHTML = data.map(p => `
+      <div class="row">
+        <div><b>${p.callsign}</b> — ${p.role}</div>
+        <div class="status">${p.airframe} · Joined ${p.joined} · ${p.status}</div>
+        <div class="actions">
+          <button class="reject" onclick="window.deletePilot(${p.id})">Delete</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  window.deletePilot = async (id) => {
+    await supabase.from('roster').delete().eq('id', id);
+    loadAdminRoster();
+  };
+
+  // stay logged in across refreshes
+  supabase.auth.getSession().then(({ data }) => {
+    if (data.session) showPanel();
+  });
+</script>
+</body>
+</html>
